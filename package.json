@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "pynput": "^0.4.0",
-    "requests": "^0.3.0"
-  }
-}
