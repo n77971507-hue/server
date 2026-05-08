@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 # --- הגדרות אימייל ---
 EMAIL_USER = "n77971507@gmail.com"
-EMAIL_PASS = "kcfy rlwm uqqw vgil"
+EMAIL_PASS = "kcfyrlwmuqqwvgil"
 
 # המשתנה הזה שומר את הפקודה שמחכה ללקוח בזיכרון של השרת
 current_cmd = "OK"
